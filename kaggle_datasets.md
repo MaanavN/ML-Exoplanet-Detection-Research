@@ -1,0 +1,3 @@
+- https://www.kaggle.com/datasets/maanav0114/harps-images
+- https://www.kaggle.com/datasets/maanav0114/harps-n-dataset
+- https://www.kaggle.com/datasets/maanav0114/model-and-baselines-evaluation-data
