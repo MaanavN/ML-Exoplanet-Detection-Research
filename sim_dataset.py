@@ -84,9 +84,12 @@ class SimDataset(Dataset):
     Mode 'shuffled': Stage 1 (ViPer-RV approach)
     Mode 'ordered': Stage 2 (realistic cadence)
     """
-    def __init__(self, sim_stars, mode='shuffled', seed=42):
+    def __init__(self, sim_stars, mode='shuffled', seed=None):
         self.mode = mode
         self.labels = [s['has_exoplanets'] for _, s in sim_stars]
+
+        if seed is not None:
+            np.random.seed(seed)
 
         if mode == 'shuffled':
             self.data = [star_to_features_shuffled(s) for _, s in sim_stars]
@@ -127,8 +130,15 @@ def collate_stars(batch):
 
 def get_sim_loaders(observations, n_sim=50000, batch_size=32,
                     shuffle=True, mode='shuffled', seed=42,
-                    device='cpu'):
-    """Generate simulated data and return train/val DataLoaders."""
+                    device='cpu', feat_mean=None, feat_std=None):
+    """Generate simulated data and return train/val DataLoaders.
+
+    Parameters:
+        feat_mean, feat_std: If provided, use these normalization stats instead
+            of computing from the simulated data. This ensures consistency across
+            stages (e.g., Stage 2 reuses Stage 1's stats). If None, compute from
+            the simulated training set and return them.
+    """
 
     # Generate simulated stars
     sim_stars = simulate_dataset(observations, n_sim_stars=n_sim,
@@ -147,10 +157,15 @@ def get_sim_loaders(observations, n_sim=50000, batch_size=32,
     train_ds = SimDataset(train_stars, mode=mode, seed=seed)
     val_ds = SimDataset(val_stars, mode=mode, seed=seed)
 
-    # Compute normalization stats from training set
-    all_train = np.concatenate([d.numpy() for d, _ in [train_ds[i] for i in range(min(1000, len(train_ds)))]], axis=0)
-    feat_mean = all_train.mean(axis=0)
-    feat_std = np.clip(all_train.std(axis=0), 1e-8, None)
+    # Compute normalization stats from training set (or use provided ones)
+    if feat_mean is None or feat_std is None:
+        all_train = np.concatenate([d.numpy() for d, _ in [train_ds[i] for i in range(min(1000, len(train_ds)))]], axis=0)
+        feat_mean = all_train.mean(axis=0)
+        # Defense-in-depth: raise std floor to 1e-2 (physical) instead of 1e-8.
+        # A feature with near-zero std in sim (e.g. constant exposure_time) would
+        # explode when real data is normalized with these stats. 1e-2 floor prevents
+        # that while not distorting features with genuine small variance.
+        feat_std = np.maximum(all_train.std(axis=0), 1e-2)
 
     # Apply normalization
     for i in range(len(train_ds)):

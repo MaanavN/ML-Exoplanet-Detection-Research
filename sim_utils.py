@@ -115,7 +115,8 @@ def gp_stellar_activity(t, rotation_period, evolution_timescale, amplitude, jitt
 def simulate_star(t_bjd, rv_err_real, rhkp_real, halpha_real,
                   has_planet, planet_params=None,
                   activity_rotation=25.0, activity_evolution=100.0,
-                  activity_amp=2.0, jitter_amp=1.0):
+                  activity_amp=2.0, jitter_amp=1.0,
+                  exposure_time_real=None):
     """Simulate a full RV time series for one star.
 
     Uses REAL observation cadence (timestamps, uncertainties, activity indicators)
@@ -131,6 +132,9 @@ def simulate_star(t_bjd, rv_err_real, rhkp_real, halpha_real,
         has_planet: whether to inject a Keplerian signal
         planet_params: dict with P, K, e, omega, T0 (if None, random)
         activity_*: stellar activity simulation parameters
+        exposure_time_real: real per-observation exposure times (seconds).
+            If None, falls back to 1800.0 constant (NOT recommended — causes
+            zero-variance feature after normalization).
 
     Returns: dict with simulated rv_centered, rv_err, exposure_time, rhkp, halpha, label
     """
@@ -191,20 +195,31 @@ def simulate_star(t_bjd, rv_err_real, rhkp_real, halpha_real,
     # 4. Total RV = activity + planet + instrument noise
     rv_centered = activity_rv + planet_rv + instrument_noise
 
-    # 5. Keep real activity indicators (RHKp, Halpha) — these are the stellar
-    # activity tracers. We perturb them slightly so they're not identical to the
-    # real star's values, but keep the overall statistical distribution.
-    # (In a more sophisticated version, we'd simulate RHKp and Halpha from the
-    # same GP that generates the activity RV, but this approximation is reasonable
-    # for pretraining where the model needs to learn general RV-activity correlations.)
-    rhkp_sim = np.array(rhkp_real) * np.random.uniform(0.8, 1.2, n_obs)
-    halpha_sim = np.array(halpha_real) * np.random.uniform(0.8, 1.2, n_obs)
+    # 5. Couple activity indicators to the GP activity realization.
+    # rhkp and Halpha are chromospheric activity tracers — they should correlate
+    # with the activity-induced RV, not just be the real template values scaled ±20%.
+    # We generate them from the same activity_rv signal so the model can learn
+    # the RV↔indicator correlation (which is what a real RV model should exploit).
+    #
+    # Physical basis: more active stars → higher S-index and H-alpha → larger RV jitter.
+    # We model: rhkp_sim = rhkp_baseline + activity_rv * conversion_factor
+    # where conversion_factor maps RV activity amplitude to indicator variation.
+    rhkp_baseline = np.mean(rhkp_real)
+    halpha_baseline = np.mean(halpha_real)
+    # Conversion factors: how much the activity RV (m/s) shifts the indicators.
+    # These are approximate but give the right order of magnitude of correlation.
+    rhkp_conv = 0.001 * np.max(np.abs(activity_rv)) / max(np.std(rhkp_real), 1e-6)
+    halpha_conv = 0.001 * np.max(np.abs(activity_rv)) / max(np.std(halpha_real), 1e-6)
+
+    rhkp_sim = rhkp_baseline + activity_rv * rhkp_conv + np.random.normal(0, np.std(rhkp_real) * 0.1, n_obs)
+    halpha_sim = halpha_baseline + activity_rv * halpha_conv + np.random.normal(0, np.std(halpha_real) * 0.1, n_obs)
 
     return {
         'bjd': t,
         'rv_centered': rv_centered,
         'rv_err': np.array(rv_err_real),
-        'exposure_time': np.full(n_obs, 1800.0, dtype=float),  # standard exposure
+        'exposure_time': np.array(exposure_time_real, dtype=float) if exposure_time_real is not None
+                          else np.full(n_obs, 1800.0, dtype=float),
         'rhkp': rhkp_sim,
         'halpha': halpha_sim,
         'has_exoplanets': int(has_planet),
@@ -257,6 +272,7 @@ def simulate_dataset(observations, n_sim_stars=50000, positive_fraction=0.5,
         rv_err = star_obs['rv_err'].values
         rhkp = star_obs['RHKp'].values
         halpha = star_obs['Halpha'].values
+        exposure_time = star_obs['exposure_time'].values if 'exposure_time' in star_obs.columns else None
 
         has_planet = i < n_positive
 
@@ -272,6 +288,7 @@ def simulate_dataset(observations, n_sim_stars=50000, positive_fraction=0.5,
             t_bjd=t_bjd, rv_err_real=rv_err,
             rhkp_real=rhkp, halpha_real=halpha,
             has_planet=has_planet,
+            exposure_time_real=exposure_time,
             **activity_args
         )
         sim_stars.append((template_star, sim_star))
