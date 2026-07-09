@@ -281,7 +281,7 @@ def simulate_dataset(observations, n_sim_stars=50000, positive_fraction=0.5,
             'activity_rotation': activity_params_range['rotation_period'],
             'activity_evolution': activity_params_range['evolution_timescale'],
             'activity_amp': activity_params_range['amplitude'],
-            'jitter_amp': activity_params_range['jitter'],
+            'jitter_amp': activity_params_range['jitter_amp'],
         }
 
         sim_star = simulate_star(
