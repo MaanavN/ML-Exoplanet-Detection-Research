@@ -84,8 +84,9 @@ class SimDataset(Dataset):
     Mode 'shuffled': Stage 1 (ViPer-RV approach)
     Mode 'ordered': Stage 2 (realistic cadence)
     """
-    def __init__(self, sim_stars, mode='shuffled', seed=None):
+    def __init__(self, sim_stars, mode='shuffled', seed=None, max_seq_len=250):
         self.mode = mode
+        self.max_seq_len = max_seq_len
         self.labels = [s['has_exoplanets'] for _, s in sim_stars]
 
         if seed is not None:
@@ -96,6 +97,9 @@ class SimDataset(Dataset):
         else:
             self.data = [star_to_features(s) for _, s in sim_stars]
 
+        # Truncate long sequences to max_seq_len
+        self.data = [d[:max_seq_len] for d in self.data]
+
     def __len__(self):
         return len(self.data)
 
@@ -104,23 +108,30 @@ class SimDataset(Dataset):
                torch.tensor(self.labels[idx], dtype=torch.float32)
 
 
-def collate_stars(batch):
-    """Same collate function as transformer.ipynb — pad variable-length sequences.
+def collate_stars(batch, max_seq_len=250):
+    """Pad variable-length sequences to max length in batch.
 
-    Returns: (padded, mask, labels) where padded is (B, max_seq_len, 21).
+    Returns: (padded, mask, labels) where padded is (B, min(max_seq_len, actual_max), 21).
+
+    Sequences longer than max_seq_len are truncated (first max_seq_len obs kept).
+    This prevents OOM from outlier stars with hundreds of observations — the
+    Transformer's self-attention is O(n²) in sequence length, so a 1000-obs
+    star in a batch of 32 needs 32×4×1000²×4 bytes ≈ 2 GB for attention alone.
     """
     stars, labels = zip(*batch)
-    max_len = max(s.shape[0] for s in stars)
+    max_len = min(max(s.shape[0] for s in stars), max_seq_len)
 
     padded, mask = [], []
     for star in stars:
-        seq_len = star.shape[0]
+        seq_len = min(star.shape[0], max_len)
+        # Truncate if longer than max_seq_len
+        star_trunc = star[:seq_len]
         pad_len = max_len - seq_len
         if pad_len > 0:
             padding = torch.zeros(pad_len, star.shape[1])
-            padded_star = torch.cat([star, padding], dim=0)
+            padded_star = torch.cat([star_trunc, padding], dim=0)
         else:
-            padded_star = star
+            padded_star = star_trunc
         star_mask = torch.cat([torch.ones(seq_len), torch.zeros(pad_len)])
         padded.append(padded_star)
         mask.append(star_mask)
@@ -130,7 +141,8 @@ def collate_stars(batch):
 
 def get_sim_loaders(observations, n_sim=50000, batch_size=32,
                     shuffle=True, mode='shuffled', seed=42,
-                    device='cpu', feat_mean=None, feat_std=None):
+                    device='cpu', feat_mean=None, feat_std=None,
+                    max_seq_len=250):
     """Generate simulated data and return train/val DataLoaders.
 
     Parameters:
@@ -154,8 +166,8 @@ def get_sim_loaders(observations, n_sim=50000, batch_size=32,
     train_stars = [sim_stars[i] for i in train_idx]
     val_stars = [sim_stars[i] for i in val_idx]
 
-    train_ds = SimDataset(train_stars, mode=mode, seed=seed)
-    val_ds = SimDataset(val_stars, mode=mode, seed=seed)
+    train_ds = SimDataset(train_stars, mode=mode, seed=seed, max_seq_len=max_seq_len)
+    val_ds = SimDataset(val_stars, mode=mode, seed=seed, max_seq_len=max_seq_len)
 
     # Compute normalization stats from training set (or use provided ones)
     if feat_mean is None or feat_std is None:
