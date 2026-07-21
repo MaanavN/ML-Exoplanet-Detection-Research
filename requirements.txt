@@ -4,3 +4,4 @@ numpy
 matplotlib
 astropy
 pandas
+astroquery
