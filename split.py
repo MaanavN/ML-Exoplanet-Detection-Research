@@ -182,6 +182,47 @@ def bootstrap_roc_auc(y_true, y_score, n_resamples=200, seed=42):
     return point, lo, hi
 
 
+def bootstrap_pr_auc(y_true, y_score, n_resamples=200, seed=42):
+    """Bootstrap 95% CI for PR-AUC (average precision) via the percentile method.
+
+    Resamples (y_true, y_score) pairs with replacement n_resamples times,
+    computes average_precision_score on each resample, and returns
+    (point_estimate, lo, hi) where lo/hi are the 2.5th and 97.5th percentiles.
+    The point estimate is the AP on the full (un-resampled) data.
+    """
+    from sklearn.metrics import average_precision_score
+
+    y_true = np.asarray(y_true).ravel()
+    y_score = np.asarray(y_score).ravel()
+    if len(y_true) != len(y_score):
+        raise ValueError(f"length mismatch: y_true={len(y_true)} y_score={len(y_score)}")
+    if len(y_true) < 2:
+        raise ValueError("need at least 2 samples to bootstrap PR-AUC")
+
+    point = float(average_precision_score(y_true, y_score))
+    rng = np.random.default_rng(seed)
+    n = len(y_true)
+    aps = np.empty(n_resamples, dtype=float)
+    for i in range(n_resamples):
+        sample_idx = rng.integers(0, n, size=n)
+        yt = y_true[sample_idx]
+        ys = y_score[sample_idx]
+        # PR-AUC is undefined if a resample contains only one class; resample once more.
+        attempts = 0
+        while len(np.unique(yt)) < 2 and attempts < 10:
+            sample_idx = rng.integers(0, n, size=n)
+            yt = y_true[sample_idx]
+            ys = y_score[sample_idx]
+            attempts += 1
+        if len(np.unique(yt)) < 2:
+            aps[i] = point  # fall back to point estimate if degenerate
+            continue
+        aps[i] = average_precision_score(yt, ys)
+    lo = float(np.percentile(aps, 2.5))
+    hi = float(np.percentile(aps, 97.5))
+    return point, lo, hi
+
+
 def main():
     """Recompute split.json from observations.pkl (requires the Kaggle dataset path)."""
     import pandas as pd
