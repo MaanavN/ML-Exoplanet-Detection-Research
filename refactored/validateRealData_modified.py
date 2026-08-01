@@ -559,7 +559,7 @@ if __name__ == "__main__":
     parser.add_argument("model_path", help="Path to Ante's trained model weights")
     parser.add_argument(
         "--observations_pkl",
-        default="/kaggle/working/observations.pkl",
+        default="data/observations.pkl",
         help="Path to our preprocessed observations.pkl with has_exoplanets labels",
     )
     parser.add_argument("--n_peaks", type=int, default=3, help="Top-n peaks per star (Ante default: 3)")
